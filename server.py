@@ -2,11 +2,18 @@ from flask import Flask, request, jsonify
 import requests
 import json
 import re
+import os
 
 app = Flask(__name__)
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "llama3.2:3b"
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+
+GEMINI_URL = (
+    "https://generativelanguage.googleapis.com/"
+    "v1beta/models/gemini-3.8-flash:generateContent"
+)
+
+MODEL = "gemini-3.8-flash"
 
 ALLOWED_ACTIONS = {
     "open_app",
@@ -19,7 +26,8 @@ ALLOWED_ACTIONS = {
 }
 
 
-def ask_ollama(message, installed_apps):
+def ask_gemini(message, installed_apps):
+
     app_list_text = "\n".join(installed_apps[:300])
 
     prompt = f"""
@@ -30,9 +38,9 @@ Understand:
 - Telugu
 - Telugu written in English letters
 - Telugu + English mixed language
-- Different natural ways of saying the same thing
+- Natural conversational language
 
-The user does NOT need to use exact commands.
+Keep replies SHORT and natural.
 
 Installed Android apps:
 {app_list_text}
@@ -41,21 +49,27 @@ User message:
 {message}
 
 Your job:
-1. Understand the user's meaning/context.
-2. If the user wants to open an installed app, use:
+
+1. If the user wants to open an installed app:
    action = "open_app"
    app_name = exact installed app name
-3. If the user wants Chrome/browser, use:
+
+2. If the user wants Chrome or browser:
    action = "open_chrome"
-4. If the user wants YouTube, use:
+
+3. If the user wants YouTube:
    action = "open_youtube"
-5. If the user wants Google/search, use:
+
+4. If the user wants Google/search:
    action = "open_google"
-6. If the user wants Android Settings, use:
+
+5. If the user wants Android Settings:
    action = "open_settings"
-7. If the user wants Calculator, use:
+
+6. If the user wants Calculator:
    action = "open_calculator"
-8. For normal questions/conversation, use:
+
+7. For normal questions or conversation:
    action = "none"
 
 Examples:
@@ -102,13 +116,38 @@ Return ONLY valid JSON in exactly this format:
 }}
 """
 
+    if not GEMINI_API_KEY:
+        print("GEMINI ERROR: GEMINI_API_KEY is missing")
+
+        return {
+            "reply": "Sir, Gemini key configure avvaledu.",
+            "action": "none",
+            "app_name": ""
+        }
+
     try:
+
         response = requests.post(
-            OLLAMA_URL,
+            GEMINI_URL,
+            headers={
+                "x-goog-api-key": GEMINI_API_KEY,
+                "Content-Type": "application/json"
+            },
             json={
-                "model": MODEL,
-                "prompt": prompt,
-                "stream": False
+                "contents": [
+                    {
+                        "parts": [
+                            {
+                                "text": prompt
+                            }
+                        ]
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": 0.3,
+                    "maxOutputTokens": 300,
+                    "responseMimeType": "application/json"
+                }
             },
             timeout=120
         )
@@ -116,14 +155,23 @@ Return ONLY valid JSON in exactly this format:
         response.raise_for_status()
 
         data = response.json()
-        raw = data.get("response", "").strip()
 
-        print("OLLAMA RAW:", raw)
+        raw = (
+            data["candidates"][0]
+            ["content"]["parts"][0]
+            ["text"]
+        ).strip()
 
-        # JSON block extraction
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        print("GEMINI RAW:", raw)
+
+        match = re.search(
+            r"\{.*\}",
+            raw,
+            re.DOTALL
+        )
 
         if not match:
+
             return {
                 "reply": raw if raw else "Sorry sir, answer dorakaledu.",
                 "action": "none",
@@ -132,9 +180,20 @@ Return ONLY valid JSON in exactly this format:
 
         result = json.loads(match.group(0))
 
-        action = result.get("action", "none")
-        app_name = result.get("app_name", "")
-        reply = result.get("reply", "Okay sir.")
+        action = result.get(
+            "action",
+            "none"
+        )
+
+        app_name = result.get(
+            "app_name",
+            ""
+        )
+
+        reply = result.get(
+            "reply",
+            "Okay sir."
+        )
 
         if action not in ALLOWED_ACTIONS:
             action = "none"
@@ -146,7 +205,8 @@ Return ONLY valid JSON in exactly this format:
         }
 
     except Exception as e:
-        print("OLLAMA ERROR:", e)
+
+        print("GEMINI ERROR:", e)
 
         return {
             "reply": "Sorry sir, JARVIS brain ki connect avvalekapoyanu.",
@@ -157,18 +217,34 @@ Return ONLY valid JSON in exactly this format:
 
 @app.route("/")
 def home():
+
     return "JARVIS Brain is Running!"
 
 
 @app.route("/chat", methods=["POST"])
 def chat():
+
     try:
+
         data = request.get_json(force=True)
 
-        message = str(data.get("message", "")).strip()
-        installed_apps = data.get("installed_apps", [])
+        message = str(
+            data.get(
+                "message",
+                ""
+            )
+        ).strip()
 
-        if not isinstance(installed_apps, list):
+        installed_apps = data.get(
+            "installed_apps",
+            []
+        )
+
+        if not isinstance(
+            installed_apps,
+            list
+        ):
+
             installed_apps = []
 
         installed_apps = [
@@ -178,6 +254,7 @@ def chat():
         ]
 
         if not message:
+
             return jsonify({
                 "reply": "Em cheyyali sir?",
                 "action": "none",
@@ -185,9 +262,12 @@ def chat():
             })
 
         print("\nUSER:", message)
-        print("INSTALLED APPS:", len(installed_apps))
 
-        # Direct app detection for natural open commands
+        print(
+            "INSTALLED APPS:",
+            len(installed_apps)
+        )
+
         message_lower = message.lower()
 
         open_words = [
@@ -203,7 +283,10 @@ def chat():
         ]
 
         for installed in installed_apps:
-            app_label = str(installed).strip()
+
+            app_label = str(
+                installed
+            ).strip()
 
             if not app_label:
                 continue
@@ -217,7 +300,10 @@ def chat():
                     message
                 )
 
-                if any(word in message_lower for word in open_words):
+                if any(
+                    word in message_lower
+                    for word in open_words
+                ):
 
                     print(
                         "ACTION: open_app",
@@ -226,28 +312,45 @@ def chat():
                     )
 
                     return jsonify({
-                        "reply": f"{app_label} open chesthunnanu sir.",
-                        "action": "open_app",
-                        "app_name": app_label
+                        "reply":
+                            f"{app_label} open chesthunnanu sir.",
+                        "action":
+                            "open_app",
+                        "app_name":
+                            app_label
                     })
 
-        # Ask AI brain
-        result = ask_ollama(
+        result = ask_gemini(
             message,
             installed_apps
         )
 
-        action = result.get("action", "none")
-        app_name = result.get("app_name", "")
-        reply = result.get("reply", "Okay sir.")
+        action = result.get(
+            "action",
+            "none"
+        )
 
-        # Verify app name before allowing open_app
+        app_name = result.get(
+            "app_name",
+            ""
+        )
+
+        reply = result.get(
+            "reply",
+            "Okay sir."
+        )
+
         if action == "open_app":
 
             matched_app = None
 
             for installed in installed_apps:
-                if installed.lower() == app_name.lower():
+
+                if (
+                    installed.lower()
+                    == app_name.lower()
+                ):
+
                     matched_app = installed
                     break
 
@@ -268,8 +371,13 @@ def chat():
                 )
 
                 action = "none"
+
                 app_name = ""
-                reply = "Aa app phone lo kanipinchaledu sir."
+
+                reply = (
+                    "Aa app phone lo "
+                    "kanipinchaledu sir."
+                )
 
         print(
             "JARVIS RESPONSE:",
@@ -279,9 +387,15 @@ def chat():
         )
 
         return jsonify({
-            "reply": reply,
-            "action": action,
-            "app_name": app_name
+
+            "reply":
+                reply,
+
+            "action":
+                action,
+
+            "app_name":
+                app_name
         })
 
     except Exception as e:
@@ -292,20 +406,47 @@ def chat():
         )
 
         return jsonify({
-            "reply": "Sorry sir, oka technical problem vachindi.",
-            "action": "none",
-            "app_name": ""
+
+            "reply":
+                "Sorry sir, oka technical problem vachindi.",
+
+            "action":
+                "none",
+
+            "app_name":
+                ""
         }), 500
 
 
 if __name__ == "__main__":
 
-    print("===================================")
-    print("        JARVIS BRAIN ONLINE")
-    print("===================================")
-    print("Model:", MODEL)
-    print("Server: http://192.168.0.18:5000")
-    print("===================================")
+    print(
+        "==================================="
+    )
+
+    print(
+        "        JARVIS BRAIN ONLINE"
+    )
+
+    print(
+        "==================================="
+    )
+
+    print(
+        "Model:",
+        MODEL
+    )
+
+    print(
+        "Gemini API:",
+        "Configured"
+        if GEMINI_API_KEY
+        else "MISSING"
+    )
+
+    print(
+        "==================================="
+    )
 
     app.run(
         host="0.0.0.0",
