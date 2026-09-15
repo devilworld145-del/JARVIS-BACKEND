@@ -1,455 +1,253 @@
 from flask import Flask, request, jsonify
-import requests
-import json
-import re
 import os
+import json
+import requests
 
 app = Flask(__name__)
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/"
-    "v1beta/models/gemini-3.8-flash:generateContent"
-)
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
 MODEL = "gemini-3.8-flash"
-
-ALLOWED_ACTIONS = {
-    "open_app",
-    "open_chrome",
-    "open_youtube",
-    "open_google",
-    "open_settings",
-    "open_calculator",
-    "none"
-}
+GEMINI_URL = (
+    f"https://generativelanguage.googleapis.com/"
+    f"v1beta/models/{MODEL}:generateContent"
+)
 
 
 def ask_gemini(message, installed_apps):
+    if not GEMINI_API_KEY:
+        return {
+            "reply": "Sir, Gemini API key configure avvaledu.",
+            "action": "none",
+            "app_name": ""
+        }
 
-    app_list_text = "\n".join(installed_apps[:300])
+    apps_text = ", ".join(installed_apps) if installed_apps else "None"
 
     prompt = f"""
-You are JARVIS, a helpful Android phone AI assistant.
+You are JARVIS, a personal Android assistant.
 
-Understand:
-- English
-- Telugu
-- Telugu written in English letters
-- Telugu + English mixed language
-- Natural conversational language
-
-Keep replies SHORT and natural.
-
-Installed Android apps:
-{app_list_text}
-
-User message:
+User said:
 {message}
 
-Your job:
+Installed Android apps:
+{apps_text}
 
-1. If the user wants to open an installed app:
-   action = "open_app"
-   app_name = exact installed app name
+Reply naturally and briefly.
 
-2. If the user wants Chrome or browser:
-   action = "open_chrome"
+If the user wants an Android action, choose one of these actions:
 
-3. If the user wants YouTube:
-   action = "open_youtube"
+open_chrome
+open_youtube
+open_google
+open_settings
+open_calculator
+open_app
+volume_up
+volume_down
+volume_mute
+ringer_normal
+ringer_silent
+ringer_vibrate
+wifi_settings
+bluetooth_settings
+alarm
+timer
+none
 
-4. If the user wants Google/search:
-   action = "open_google"
-
-5. If the user wants Android Settings:
-   action = "open_settings"
-
-6. If the user wants Calculator:
-   action = "open_calculator"
-
-7. For normal questions or conversation:
-   action = "none"
-
-Examples:
-
-"Open WhatsApp"
-=> open_app, app_name = WhatsApp
-
-"WhatsApp open cheyyi"
-=> open_app, app_name = WhatsApp
-
-"Whatsapp loki teesukellu"
-=> open_app, app_name = WhatsApp
-
-"Chrome open chey"
-=> open_chrome
-
-"Browser open cheyyi"
-=> open_chrome
-
-"YouTube ki teesukellu"
-=> open_youtube
-
-"Google lo search cheyyali"
-=> open_google
-
-"Settings open cheyyi"
-=> open_settings
-
-"Calculator kavali"
-=> open_calculator
-
-"Who is Iron Man?"
-=> none
-
-"Naaku oka joke cheppu"
-=> none
+For open_app, put the requested app name in app_name.
 
 Return ONLY valid JSON in exactly this format:
 
 {{
   "reply": "short natural response",
-  "action": "open_app/open_chrome/open_youtube/open_google/open_settings/open_calculator/none",
-  "app_name": "exact installed app name or empty string"
+  "action": "none",
+  "app_name": ""
 }}
+
+Do not use markdown.
+Do not add extra text.
 """
 
-    if not GEMINI_API_KEY:
-        print("GEMINI ERROR: GEMINI_API_KEY is missing")
-
-        return {
-            "reply": "Sir, Gemini key configure avvaledu.",
-            "action": "none",
-            "app_name": ""
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": prompt
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.3,
+            "maxOutputTokens": 300,
+            "responseMimeType": "application/json"
         }
+    }
 
     try:
-
         response = requests.post(
             GEMINI_URL,
             headers={
-                "x-goog-api-key": GEMINI_API_KEY,
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "x-goog-api-key": GEMINI_API_KEY
             },
-            json={
-                "contents": [
-                    {
-                        "parts": [
-                            {
-                                "text": prompt
-                            }
-                        ]
-                    }
-                ],
-                "generationConfig": {
-                    "temperature": 0.3,
-                    "maxOutputTokens": 300,
-                    "responseMimeType": "application/json"
-                }
-            },
+            json=payload,
             timeout=120
         )
 
-        response.raise_for_status()
+        print("GEMINI STATUS:", response.status_code)
+        print("GEMINI RESPONSE:", response.text)
 
-        data = response.json()
-
-        raw = (
-            data["candidates"][0]
-            ["content"]["parts"][0]
-            ["text"]
-        ).strip()
-
-        print("GEMINI RAW:", raw)
-
-        match = re.search(
-            r"\{.*\}",
-            raw,
-            re.DOTALL
-        )
-
-        if not match:
-
+        if response.status_code != 200:
             return {
-                "reply": raw if raw else "Sorry sir, answer dorakaledu.",
+                "reply": f"Gemini error HTTP {response.status_code}",
                 "action": "none",
                 "app_name": ""
             }
 
-        result = json.loads(match.group(0))
+        data = response.json()
 
-        action = result.get(
-            "action",
-            "none"
-        )
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
 
-        app_name = result.get(
-            "app_name",
-            ""
-        )
-
-        reply = result.get(
-            "reply",
-            "Okay sir."
-        )
-
-        if action not in ALLOWED_ACTIONS:
-            action = "none"
+        result = json.loads(text)
 
         return {
-            "reply": str(reply),
-            "action": action,
-            "app_name": str(app_name)
+            "reply": str(result.get("reply", "")),
+            "action": str(result.get("action", "none")),
+            "app_name": str(result.get("app_name", ""))
         }
 
     except Exception as e:
-
-        print("GEMINI ERROR:", e)
+        print("GEMINI ERROR:", repr(e))
 
         return {
-            "reply": "Sorry sir, JARVIS brain ki connect avvalekapoyanu.",
+            "reply": f"Gemini connection error: {type(e).__name__}",
             "action": "none",
             "app_name": ""
         }
 
 
-@app.route("/")
+@app.route("/", methods=["GET"])
 def home():
-
     return "JARVIS Brain is Running!"
 
 
 @app.route("/chat", methods=["POST"])
 def chat():
-
     try:
+        data = request.get_json(silent=True) or {}
 
-        data = request.get_json(force=True)
-
-        message = str(
-            data.get(
-                "message",
-                ""
-            )
-        ).strip()
-
-        installed_apps = data.get(
-            "installed_apps",
-            []
-        )
-
-        if not isinstance(
-            installed_apps,
-            list
-        ):
-
-            installed_apps = []
-
-        installed_apps = [
-            str(app).strip()
-            for app in installed_apps
-            if str(app).strip()
-        ]
+        message = str(data.get("message", "")).strip()
+        installed_apps = data.get("installed_apps", [])
 
         if not message:
-
             return jsonify({
-                "reply": "Em cheyyali sir?",
+                "reply": "Sir, command vinipinchaledu.",
                 "action": "none",
                 "app_name": ""
             })
 
-        print("\nUSER:", message)
+        # Direct commands first
+        lower = message.lower()
 
-        print(
-            "INSTALLED APPS:",
-            len(installed_apps)
-        )
+        if "open chrome" in lower or "chrome open" in lower:
+            return jsonify({
+                "reply": "Opening Chrome, sir.",
+                "action": "open_chrome",
+                "app_name": ""
+            })
 
-        message_lower = message.lower()
+        if "open youtube" in lower or "youtube open" in lower:
+            return jsonify({
+                "reply": "Opening YouTube, sir.",
+                "action": "open_youtube",
+                "app_name": ""
+            })
 
-        open_words = [
-            "open",
-            "launch",
-            "start",
-            "go to",
-            "open cheyyi",
-            "open chey",
-            "teesukellu",
-            "loki teesukellu",
-            "kavali"
-        ]
+        if "open google" in lower or "google open" in lower:
+            return jsonify({
+                "reply": "Opening Google, sir.",
+                "action": "open_google",
+                "app_name": ""
+            })
 
-        for installed in installed_apps:
+        if "open settings" in lower or "settings open" in lower:
+            return jsonify({
+                "reply": "Opening Settings, sir.",
+                "action": "open_settings",
+                "app_name": ""
+            })
 
-            app_label = str(
-                installed
-            ).strip()
+        if "calculator open" in lower or "open calculator" in lower:
+            return jsonify({
+                "reply": "Opening Calculator, sir.",
+                "action": "open_calculator",
+                "app_name": ""
+            })
 
-            if not app_label:
-                continue
+        if "volume up" in lower or "increase volume" in lower:
+            return jsonify({
+                "reply": "Increasing volume, sir.",
+                "action": "volume_up",
+                "app_name": ""
+            })
 
-            if app_label.lower() in message_lower:
+        if "volume down" in lower or "decrease volume" in lower:
+            return jsonify({
+                "reply": "Decreasing volume, sir.",
+                "action": "volume_down",
+                "app_name": ""
+            })
 
-                print(
-                    "APP DETECTED:",
-                    app_label,
-                    "| MESSAGE:",
-                    message
-                )
+        if "mute" in lower:
+            return jsonify({
+                "reply": "Muting volume, sir.",
+                "action": "volume_mute",
+                "app_name": ""
+            })
 
-                if any(
-                    word in message_lower
-                    for word in open_words
-                ):
+        if "wifi settings" in lower or "open wifi" in lower:
+            return jsonify({
+                "reply": "Opening Wi-Fi settings, sir.",
+                "action": "wifi_settings",
+                "app_name": ""
+            })
 
-                    print(
-                        "ACTION: open_app",
-                        "| APP:",
-                        app_label
-                    )
+        if "bluetooth settings" in lower or "open bluetooth" in lower:
+            return jsonify({
+                "reply": "Opening Bluetooth settings, sir.",
+                "action": "bluetooth_settings",
+                "app_name": ""
+            })
 
-                    return jsonify({
-                        "reply":
-                            f"{app_label} open chesthunnanu sir.",
-                        "action":
-                            "open_app",
-                        "app_name":
-                            app_label
-                    })
+        # Otherwise ask Gemini
+        result = ask_gemini(message, installed_apps)
 
-        result = ask_gemini(
-            message,
-            installed_apps
-        )
-
-        action = result.get(
-            "action",
-            "none"
-        )
-
-        app_name = result.get(
-            "app_name",
-            ""
-        )
-
-        reply = result.get(
-            "reply",
-            "Okay sir."
-        )
-
-        if action == "open_app":
-
-            matched_app = None
-
-            for installed in installed_apps:
-
-                if (
-                    installed.lower()
-                    == app_name.lower()
-                ):
-
-                    matched_app = installed
-                    break
-
-            if matched_app:
-
-                app_name = matched_app
-
-                print(
-                    "VERIFIED APP:",
-                    app_name
-                )
-
-            else:
-
-                print(
-                    "APP NOT FOUND:",
-                    app_name
-                )
-
-                action = "none"
-
-                app_name = ""
-
-                reply = (
-                    "Aa app phone lo "
-                    "kanipinchaledu sir."
-                )
-
-        print(
-            "JARVIS RESPONSE:",
-            action,
-            "|",
-            app_name
-        )
-
-        return jsonify({
-
-            "reply":
-                reply,
-
-            "action":
-                action,
-
-            "app_name":
-                app_name
-        })
+        return jsonify(result)
 
     except Exception as e:
-
-        print(
-            "SERVER ERROR:",
-            e
-        )
+        print("SERVER ERROR:", repr(e))
 
         return jsonify({
-
-            "reply":
-                "Sorry sir, oka technical problem vachindi.",
-
-            "action":
-                "none",
-
-            "app_name":
-                ""
+            "reply": f"Server error: {type(e).__name__}",
+            "action": "none",
+            "app_name": ""
         }), 500
 
 
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
 
-    print(
-        "==================================="
-    )
-
-    print(
-        "        JARVIS BRAIN ONLINE"
-    )
-
-    print(
-        "==================================="
-    )
-
-    print(
-        "Model:",
-        MODEL
-    )
-
-    print(
-        "Gemini API:",
-        "Configured"
-        if GEMINI_API_KEY
-        else "MISSING"
-    )
-
-    print(
-        "==================================="
-    )
+    print("===================================")
+    print("       JARVIS BACKEND ONLINE")
+    print("===================================")
+    print("Model:", MODEL)
+    print("Gemini API:", "Configured" if GEMINI_API_KEY else "NOT CONFIGURED")
+    print("Port:", port)
 
     app.run(
         host="0.0.0.0",
-        port=5000,
-        debug=False
+        port=port
     )
