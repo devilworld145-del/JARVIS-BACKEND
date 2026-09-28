@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 import os
 import json
 import requests
+import time
 
 app = Flask(__name__)
 
@@ -11,11 +12,15 @@ app = Flask(__name__)
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
+# Primary model
 MODEL = "gemini-3.5-flash-lite"
 
-GEMINI_URL = (
-    f"https://generativelanguage.googleapis.com/"
-    f"v1beta/models/{MODEL}:generateContent"
+# Fallback model if Gemini temporarily returns HTTP 503
+FALLBACK_MODEL = "gemini-3.1-flash-lite"
+
+GEMINI_BASE_URL = (
+    "https://generativelanguage.googleapis.com/"
+    "v1beta/models"
 )
 
 # Reuse HTTP connection for better latency
@@ -45,12 +50,124 @@ def jarvis_response(
 
 
 # =========================================================
+# GEMINI REQUEST
+# =========================================================
+
+def call_gemini_model(model, payload, retries=2):
+
+    url = f"{GEMINI_BASE_URL}/{model}:generateContent"
+
+    for attempt in range(retries + 1):
+
+        try:
+
+            print("-----------------------------------")
+            print("GEMINI REQUEST")
+            print("MODEL:", model)
+            print("ATTEMPT:", attempt + 1)
+
+            response = SESSION.post(
+                url,
+                json=payload,
+                timeout=(5, 20)
+            )
+
+            print("GEMINI STATUS:", response.status_code)
+
+            # -------------------------------------------------
+            # SUCCESS
+            # -------------------------------------------------
+
+            if response.status_code == 200:
+                return response
+
+            # -------------------------------------------------
+            # TEMPORARY SERVER OVERLOAD / UNAVAILABLE
+            # Google recommends exponential backoff for 503.
+            # -------------------------------------------------
+
+            if response.status_code == 503:
+
+                print(
+                    "GEMINI 503:",
+                    response.text[:1000]
+                )
+
+                if attempt < retries:
+
+                    delay = 1.5 * (2 ** attempt)
+
+                    print(
+                        f"503 retrying in {delay:.1f} seconds..."
+                    )
+
+                    time.sleep(delay)
+                    continue
+
+                return response
+
+            # -------------------------------------------------
+            # Other HTTP errors
+            # -------------------------------------------------
+
+            print(
+                "GEMINI HTTP ERROR:",
+                response.text[:1000]
+            )
+
+            return response
+
+        except requests.Timeout:
+
+            print(
+                "GEMINI TIMEOUT ON MODEL:",
+                model
+            )
+
+            if attempt < retries:
+
+                delay = 1.5 * (2 ** attempt)
+
+                print(
+                    f"Timeout retrying in {delay:.1f} seconds..."
+                )
+
+                time.sleep(delay)
+                continue
+
+            raise
+
+        except requests.RequestException as e:
+
+            print(
+                "NETWORK ERROR:",
+                repr(e)
+            )
+
+            if attempt < retries:
+
+                delay = 1.5 * (2 ** attempt)
+
+                print(
+                    f"Network retrying in {delay:.1f} seconds..."
+                )
+
+                time.sleep(delay)
+                continue
+
+            raise
+
+    return None
+
+
+# =========================================================
 # GEMINI
 # =========================================================
 
 def ask_gemini(message, installed_apps):
 
     if not GEMINI_API_KEY:
+
         return jarvis_response(
             "Sir, Gemini API key configure avvaledu."
         )
@@ -126,27 +243,81 @@ Return ONLY this JSON:
 
         print("===================================")
         print("JARVIS → GEMINI")
-        print("MODEL:", MODEL)
+        print("PRIMARY MODEL:", MODEL)
+        print("FALLBACK MODEL:", FALLBACK_MODEL)
         print("MESSAGE:", message)
 
-        response = SESSION.post(
-            GEMINI_URL,
-            json=payload,
-            timeout=(5, 20)
+        # =====================================================
+        # 1. PRIMARY MODEL
+        # =====================================================
+
+        response = call_gemini_model(
+            MODEL,
+            payload,
+            retries=2
         )
 
-        print("GEMINI STATUS:", response.status_code)
+        # =====================================================
+        # 2. IF PRIMARY RETURNS 503,
+        #    AUTOMATICALLY TRY FALLBACK MODEL
+        # =====================================================
+
+        if response is not None and response.status_code == 503:
+
+            print("===================================")
+            print("PRIMARY GEMINI MODEL STILL 503")
+            print("SWITCHING TO FALLBACK MODEL")
+            print("FALLBACK:", FALLBACK_MODEL)
+            print("===================================")
+
+            response = call_gemini_model(
+                FALLBACK_MODEL,
+                payload,
+                retries=1
+            )
+
+        # =====================================================
+        # 3. FINAL HTTP ERROR
+        # =====================================================
+
+        if response is None:
+
+            return jarvis_response(
+                "Sir, Gemini connection problem."
+            )
 
         if response.status_code != 200:
 
             print(
-                "GEMINI ERROR:",
+                "FINAL GEMINI ERROR:",
                 response.text[:1000]
             )
+
+            if response.status_code == 503:
+
+                return jarvis_response(
+                    "Sir, Gemini is temporarily unavailable. Please try again."
+                )
+
+            if response.status_code == 429:
+
+                return jarvis_response(
+                    "Sir, Gemini request limit reached. Please try again shortly."
+                )
+
+            if response.status_code in (401, 403):
+
+                return jarvis_response(
+                    "Sir, Gemini API authorization problem."
+                )
 
             return jarvis_response(
                 f"Gemini error HTTP {response.status_code}"
             )
+
+        # =====================================================
+        # 4. PARSE GEMINI RESPONSE
+        # =====================================================
 
         data = response.json()
 
@@ -488,7 +659,8 @@ if __name__ == "__main__":
     print("===================================")
     print("       JARVIS BACKEND ONLINE")
     print("===================================")
-    print("MODEL:", MODEL)
+    print("PRIMARY MODEL:", MODEL)
+    print("FALLBACK MODEL:", FALLBACK_MODEL)
     print(
         "GEMINI API:",
         "CONFIGURED"
