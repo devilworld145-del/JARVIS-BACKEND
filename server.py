@@ -10,12 +10,15 @@ app = Flask(__name__)
 # CONFIG
 # =========================================================
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+GEMINI_API_KEY = os.environ.get(
+    "GEMINI_API_KEY",
+    ""
+).strip()
 
 # Primary model
 MODEL = "gemini-3.5-flash-lite"
 
-# Fallback model if Gemini temporarily returns HTTP 503
+# Fallback model for temporary 503
 FALLBACK_MODEL = "gemini-3.1-flash-lite"
 
 GEMINI_BASE_URL = (
@@ -23,7 +26,7 @@ GEMINI_BASE_URL = (
     "v1beta/models"
 )
 
-# Reuse HTTP connection for better latency
+# Reuse HTTP connection
 SESSION = requests.Session()
 
 SESSION.headers.update({
@@ -53,9 +56,16 @@ def jarvis_response(
 # GEMINI REQUEST
 # =========================================================
 
-def call_gemini_model(model, payload, retries=2):
+def call_gemini_model(
+    model,
+    payload,
+    retries=2
+):
 
-    url = f"{GEMINI_BASE_URL}/{model}:generateContent"
+    url = (
+        f"{GEMINI_BASE_URL}/"
+        f"{model}:generateContent"
+    )
 
     for attempt in range(retries + 1):
 
@@ -72,19 +82,21 @@ def call_gemini_model(model, payload, retries=2):
                 timeout=(5, 20)
             )
 
-            print("GEMINI STATUS:", response.status_code)
+            print(
+                "GEMINI STATUS:",
+                response.status_code
+            )
 
-            # -------------------------------------------------
+            # =================================================
             # SUCCESS
-            # -------------------------------------------------
+            # =================================================
 
             if response.status_code == 200:
                 return response
 
-            # -------------------------------------------------
-            # TEMPORARY SERVER OVERLOAD / UNAVAILABLE
-            # Google recommends exponential backoff for 503.
-            # -------------------------------------------------
+            # =================================================
+            # TEMPORARY 503
+            # =================================================
 
             if response.status_code == 503:
 
@@ -95,20 +107,24 @@ def call_gemini_model(model, payload, retries=2):
 
                 if attempt < retries:
 
-                    delay = 1.5 * (2 ** attempt)
+                    delay = 1.5 * (
+                        2 ** attempt
+                    )
 
                     print(
-                        f"503 retrying in {delay:.1f} seconds..."
+                        f"503 retrying in "
+                        f"{delay:.1f} seconds..."
                     )
 
                     time.sleep(delay)
+
                     continue
 
                 return response
 
-            # -------------------------------------------------
-            # Other HTTP errors
-            # -------------------------------------------------
+            # =================================================
+            # OTHER HTTP ERRORS
+            # =================================================
 
             print(
                 "GEMINI HTTP ERROR:",
@@ -126,13 +142,17 @@ def call_gemini_model(model, payload, retries=2):
 
             if attempt < retries:
 
-                delay = 1.5 * (2 ** attempt)
+                delay = 1.5 * (
+                    2 ** attempt
+                )
 
                 print(
-                    f"Timeout retrying in {delay:.1f} seconds..."
+                    f"Timeout retrying in "
+                    f"{delay:.1f} seconds..."
                 )
 
                 time.sleep(delay)
+
                 continue
 
             raise
@@ -146,13 +166,17 @@ def call_gemini_model(model, payload, retries=2):
 
             if attempt < retries:
 
-                delay = 1.5 * (2 ** attempt)
+                delay = 1.5 * (
+                    2 ** attempt
+                )
 
                 print(
-                    f"Network retrying in {delay:.1f} seconds..."
+                    f"Network retrying in "
+                    f"{delay:.1f} seconds..."
                 )
 
                 time.sleep(delay)
+
                 continue
 
             raise
@@ -164,7 +188,10 @@ def call_gemini_model(model, payload, retries=2):
 # GEMINI
 # =========================================================
 
-def ask_gemini(message, installed_apps):
+def ask_gemini(
+    message,
+    installed_apps
+):
 
     if not GEMINI_API_KEY:
 
@@ -172,11 +199,16 @@ def ask_gemini(message, installed_apps):
             "Sir, Gemini API key configure avvaledu."
         )
 
-    apps_text = ", ".join(
-        installed_apps
-    ) if installed_apps else "None"
+    apps_text = (
+        ", ".join(installed_apps)
+        if installed_apps
+        else "None"
+    )
 
-    # Short prompt = less input processing
+    # =====================================================
+    # STRICT JARVIS PROMPT
+    # =====================================================
+
     prompt = f"""
 You are JARVIS, a fast personal Android voice assistant.
 
@@ -188,7 +220,66 @@ Installed apps:
 
 Give a short natural answer.
 
-Available actions:
+IMPORTANT BEHAVIOR:
+
+1. Normal questions, topics, movies, people, places,
+   general knowledge, explanations and conversations
+   MUST be answered directly.
+
+2. NEVER open Google or Chrome just because the user
+   mentions a topic.
+
+3. A topic is NOT a search command.
+
+4. Examples of NORMAL QUESTIONS:
+
+"Marvel movies"
+→ Give information about Marvel movies.
+
+"Tell me about Marvel"
+→ Answer about Marvel.
+
+"Who is Iron Man?"
+→ Answer directly.
+
+"What are the Avengers?"
+→ Answer directly.
+
+"Latest Marvel movie"
+→ Answer normally unless the user explicitly asks
+  to search Google.
+
+5. Google/Chrome actions are allowed ONLY when the user
+   explicitly asks to search, browse, open Google, or
+   open Chrome.
+
+6. Examples of EXPLICIT SEARCH/ACTION COMMANDS:
+
+"Open Google"
+→ action = open_google
+
+"Open Chrome"
+→ action = open_chrome
+
+"Search Marvel movies on Google"
+→ action = open_google
+
+"Search for Marvel movies"
+→ action = open_google
+
+"Google Marvel movies"
+→ action = open_google
+
+7. If the user only mentions a topic, answer it.
+   Do NOT convert it into a search action.
+
+8. If there is no clear action request,
+   action MUST be "none".
+
+9. Keep answers short because JARVIS is a voice assistant.
+
+AVAILABLE ACTIONS:
+
 open_chrome
 open_youtube
 open_google
@@ -207,20 +298,39 @@ alarm
 timer
 none
 
-Use an action only when the user clearly requests it.
+STRICT ACTION RULE:
+
+Use an action ONLY when the user's words clearly
+and explicitly request that action.
 
 For open_app:
 app_name must contain the requested app name.
 
-Return ONLY this JSON:
+IMPORTANT:
+
+Do not invent an action.
+
+Do not use open_google for normal questions.
+
+Do not use open_chrome for normal questions.
+
+Return ONLY valid JSON.
+
+JSON FORMAT:
+
 {{
-  "reply": "short answer",
+  "reply": "short natural answer",
   "action": "none",
   "app_name": ""
 }}
 """
 
+    # =====================================================
+    # GEMINI PAYLOAD
+    # =====================================================
+
     payload = {
+
         "contents": [
             {
                 "parts": [
@@ -230,9 +340,14 @@ Return ONLY this JSON:
                 ]
             }
         ],
+
         "generationConfig": {
+
             "maxOutputTokens": 120,
-            "responseMimeType": "application/json",
+
+            "responseMimeType":
+                "application/json",
+
             "thinkingConfig": {
                 "thinkingLevel": "minimal"
             }
@@ -244,12 +359,18 @@ Return ONLY this JSON:
         print("===================================")
         print("JARVIS → GEMINI")
         print("PRIMARY MODEL:", MODEL)
-        print("FALLBACK MODEL:", FALLBACK_MODEL)
-        print("MESSAGE:", message)
+        print(
+            "FALLBACK MODEL:",
+            FALLBACK_MODEL
+        )
+        print(
+            "MESSAGE:",
+            message
+        )
 
-        # =====================================================
-        # 1. PRIMARY MODEL
-        # =====================================================
+        # =================================================
+        # PRIMARY MODEL
+        # =================================================
 
         response = call_gemini_model(
             MODEL,
@@ -257,17 +378,26 @@ Return ONLY this JSON:
             retries=2
         )
 
-        # =====================================================
-        # 2. IF PRIMARY RETURNS 503,
-        #    AUTOMATICALLY TRY FALLBACK MODEL
-        # =====================================================
+        # =================================================
+        # FALLBACK MODEL ON 503
+        # =================================================
 
-        if response is not None and response.status_code == 503:
+        if (
+            response is not None
+            and response.status_code == 503
+        ):
 
             print("===================================")
-            print("PRIMARY GEMINI MODEL STILL 503")
-            print("SWITCHING TO FALLBACK MODEL")
-            print("FALLBACK:", FALLBACK_MODEL)
+            print(
+                "PRIMARY MODEL STILL 503"
+            )
+            print(
+                "SWITCHING TO FALLBACK MODEL"
+            )
+            print(
+                "FALLBACK:",
+                FALLBACK_MODEL
+            )
             print("===================================")
 
             response = call_gemini_model(
@@ -276,15 +406,19 @@ Return ONLY this JSON:
                 retries=1
             )
 
-        # =====================================================
-        # 3. FINAL HTTP ERROR
-        # =====================================================
+        # =================================================
+        # NO RESPONSE
+        # =================================================
 
         if response is None:
 
             return jarvis_response(
                 "Sir, Gemini connection problem."
             )
+
+        # =================================================
+        # FINAL HTTP ERROR
+        # =================================================
 
         if response.status_code != 200:
 
@@ -305,19 +439,23 @@ Return ONLY this JSON:
                     "Sir, Gemini request limit reached. Please try again shortly."
                 )
 
-            if response.status_code in (401, 403):
+            if response.status_code in (
+                401,
+                403
+            ):
 
                 return jarvis_response(
                     "Sir, Gemini API authorization problem."
                 )
 
             return jarvis_response(
-                f"Gemini error HTTP {response.status_code}"
+                f"Gemini error HTTP "
+                f"{response.status_code}"
             )
 
-        # =====================================================
-        # 4. PARSE GEMINI RESPONSE
-        # =====================================================
+        # =================================================
+        # PARSE RESPONSE
+        # =================================================
 
         data = response.json()
 
@@ -332,10 +470,14 @@ Return ONLY this JSON:
                 "Sir, Gemini response empty ga vachindi."
             )
 
-        parts = (
-            candidates[0]
-            .get("content", {})
-            .get("parts", [])
+        content = candidates[0].get(
+            "content",
+            {}
+        )
+
+        parts = content.get(
+            "parts",
+            []
         )
 
         if not parts:
@@ -355,16 +497,30 @@ Return ONLY this JSON:
                 "Sir, response empty ga vachindi."
             )
 
-        print("GEMINI RAW:", text)
+        print(
+            "GEMINI RAW:",
+            text
+        )
 
-        # Safety cleanup if model accidentally adds markdown
+        # =================================================
+        # CLEAN JSON MARKDOWN
+        # =================================================
+
         text = text.replace(
             "```json",
             ""
-        ).replace(
+        )
+
+        text = text.replace(
             "```",
             ""
-        ).strip()
+        )
+
+        text = text.strip()
+
+        # =================================================
+        # JSON PARSE
+        # =================================================
 
         result = json.loads(text)
 
@@ -389,19 +545,57 @@ Return ONLY this JSON:
             )
         ).strip()
 
+        # =================================================
+        # ACTION SAFETY
+        # =================================================
+
+        allowed_actions = {
+            "open_chrome",
+            "open_youtube",
+            "open_google",
+            "open_settings",
+            "open_calculator",
+            "open_app",
+            "volume_up",
+            "volume_down",
+            "volume_mute",
+            "ringer_normal",
+            "ringer_silent",
+            "ringer_vibrate",
+            "wifi_settings",
+            "bluetooth_settings",
+            "alarm",
+            "timer",
+            "none"
+        }
+
+        if action not in allowed_actions:
+
+            action = "none"
+
         return jarvis_response(
             reply,
             action,
             app_name
         )
 
+    # =====================================================
+    # TIMEOUT
+    # =====================================================
+
     except requests.Timeout:
 
-        print("GEMINI TIMEOUT")
+        print(
+            "GEMINI TIMEOUT"
+        )
 
         return jarvis_response(
             "Sir, Gemini response time ayipoyindi."
         )
+
+    # =====================================================
+    # NETWORK ERROR
+    # =====================================================
 
     except requests.RequestException as e:
 
@@ -414,6 +608,10 @@ Return ONLY this JSON:
             "Sir, Gemini network connection problem."
         )
 
+    # =====================================================
+    # JSON ERROR
+    # =====================================================
+
     except json.JSONDecodeError as e:
 
         print(
@@ -424,6 +622,10 @@ Return ONLY this JSON:
         return jarvis_response(
             "Sir, Gemini response format problem."
         )
+
+    # =====================================================
+    # OTHER ERROR
+    # =====================================================
 
     except Exception as e:
 
@@ -441,7 +643,10 @@ Return ONLY this JSON:
 # HOME
 # =========================================================
 
-@app.route("/", methods=["GET"])
+@app.route(
+    "/",
+    methods=["GET"]
+)
 def home():
 
     return "JARVIS Brain is Running!"
@@ -451,7 +656,10 @@ def home():
 # CHAT
 # =========================================================
 
-@app.route("/chat", methods=["POST"])
+@app.route(
+    "/chat",
+    methods=["POST"]
+)
 def chat():
 
     try:
@@ -490,7 +698,6 @@ def chat():
 
         # =================================================
         # FAST LOCAL COMMANDS
-        # No Gemini call needed
         # =================================================
 
         if (
@@ -618,7 +825,7 @@ def chat():
             )
 
         # =================================================
-        # GEMINI
+        # EVERYTHING ELSE → GEMINI
         # =================================================
 
         result = ask_gemini(
@@ -626,7 +833,9 @@ def chat():
             installed_apps
         )
 
-        return jsonify(result)
+        return jsonify(
+            result
+        )
 
     except Exception as e:
 
@@ -637,7 +846,8 @@ def chat():
 
         return jsonify(
             jarvis_response(
-                f"Server error: {type(e).__name__}"
+                f"Server error: "
+                f"{type(e).__name__}"
             )
         ), 500
 
@@ -659,15 +869,24 @@ if __name__ == "__main__":
     print("===================================")
     print("       JARVIS BACKEND ONLINE")
     print("===================================")
-    print("PRIMARY MODEL:", MODEL)
-    print("FALLBACK MODEL:", FALLBACK_MODEL)
+    print(
+        "PRIMARY MODEL:",
+        MODEL
+    )
+    print(
+        "FALLBACK MODEL:",
+        FALLBACK_MODEL
+    )
     print(
         "GEMINI API:",
         "CONFIGURED"
         if GEMINI_API_KEY
         else "NOT CONFIGURED"
     )
-    print("PORT:", port)
+    print(
+        "PORT:",
+        port
+    )
     print("===================================")
     print("")
 
